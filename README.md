@@ -19,3 +19,10 @@ On first run `redaction_viewer.py` downloads a bootstrap css from the given URL 
 
 **Both Tools need to be run from the same folder and venv.**
 
+## AUTH
+
+**There is no auth!**
+
+This tool saves all redacted messages. **PLEASE** protect it, with something like a htbasicauth or don't expose it to the internet at all!
+
+This tool also allows you to join or leave any channel with the bot. So **please** *really* **PROTECT THE INTERFACE**
