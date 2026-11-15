@@ -4,7 +4,7 @@ Logs redactions in a given set of matrix rooms
 
 ## howto
 
-1. `git clone https://github.com/thies23/matrix-logger`
+1. `git clone https://github.com/thies23/matrix-redaction-logger`
 2. `python3 -m venv .venv`
 3. `source .venv/bin/activate`
 4. `pip3 install -r requirements.txt`
