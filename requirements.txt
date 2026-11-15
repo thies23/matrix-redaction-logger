@@ -1,0 +1,4 @@
+matrix-nio[e2e]>=0.24
+aiohttp>=3.9
+flask>=3.0
+requests>=2.31

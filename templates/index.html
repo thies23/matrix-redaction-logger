@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matrix Redaction Viewer</title>
+<script>
+  document.documentElement.setAttribute('data-bs-theme',
+    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+</script>
+<link rel="stylesheet" href="static/bootstrap.min.css">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; }
+  .app-main { flex: 1; min-height: 0; }
+  .scroll { overflow-y: auto; min-height: 0; }
+  #list .list-group-item { cursor: pointer; }
+  #list .preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg { border-left: 3px solid transparent; border-radius: var(--bs-border-radius); padding: .4rem .75rem; margin: .15rem 0; }
+  .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.restored { background: var(--bs-danger-bg-subtle); border-left-color: var(--bs-danger); }
+  .msg.target { outline: 2px solid var(--bs-danger); animation: flash 2.2s ease-out 1; }
+  @keyframes flash { 0% { background: var(--bs-warning-bg-subtle); } 100% { background: var(--bs-danger-bg-subtle); } }
+  .msg.redacted .body, .msg.encrypted .body { font-style: italic; color: var(--bs-secondary-color); }
+  .reply { border-left: 2px solid var(--bs-border-color); padding-left: .5rem; cursor: pointer; }
+  .media img { max-width: min(360px, 100%); max-height: 360px; }
+  .media video { max-width: min(420px, 100%); max-height: 360px; }
+  .old { white-space: pre-wrap; border-left: 2px solid var(--bs-border-color); padding-left: .5rem; margin: .2rem 0; }
+  .sidebar { width: 400px; min-width: 300px; }
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand bg-body-tertiary border-bottom px-3">
+  <span class="navbar-brand">Matrix Redaction Viewer</span>
+  <ul class="navbar-nav">
+    <li class="nav-item"><a class="nav-link active" href="#" data-view="redactions">Redactions</a></li>
+    <li class="nav-item"><a class="nav-link" href="#rooms" data-view="rooms">Rooms</a></li>
+  </ul>
+  <span class="navbar-text ms-auto small" id="botuser"></span>
+</nav>
+
+<!-- Redactions view -->
+<div id="view-redactions" class="app-main d-flex">
+  <aside class="sidebar d-flex flex-column border-end bg-body">
+    <div class="p-3 border-bottom">
+      <div id="ownwrap" class="form-check mb-3 d-none">
+        <input id="showall" class="form-check-input" type="checkbox">
+        <label id="ownlabel" class="form-check-label small" for="showall"></label>
+      </div>
+      <div class="form-check mb-3">
+        <input id="hideroom" class="form-check-input" type="checkbox" checked>
+        <label class="form-check-label small" for="hideroom"
+               title="Hides room events such as bans (redacted m.room.member events)">Hide room events</label>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="homeserver">Homeserver</label>
+        <select id="homeserver" class="form-select form-select-sm"><option value="">All homeservers</option></select>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="user">User</label>
+        <select id="user" class="form-select form-select-sm"><option value="">All users</option></select>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="role">Role</label>
+        <select id="role" class="form-select form-select-sm">
+          <option value="any">Sender or redacted by</option>
+          <option value="sender">Sender only</option>
+          <option value="redacter">Redacted by only</option>
+        </select>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="room">Room</label>
+        <select id="room" class="form-select form-select-sm"><option value="">All rooms</option></select>
+      </div>
+      <input id="q" type="search" class="form-control form-control-sm" placeholder="Search text or reason">
+      <div id="count" class="form-text"></div>
+    </div>
+    <div id="list" class="list-group list-group-flush scroll flex-grow-1"></div>
+  </aside>
+
+  <section class="flex-grow-1 d-flex flex-column" style="min-width:0">
+    <div class="px-3 py-2 border-bottom bg-body">
+      <div id="roomtitle" class="fw-semibold">No entry selected</div>
+      <div id="roomsub" class="small text-body-secondary"></div>
+    </div>
+    <div id="warn" class="alert alert-warning rounded-0 mb-0 py-2 small d-none"></div>
+    <div id="timeline" class="scroll flex-grow-1 px-3 py-2">
+      <p class="text-body-secondary text-center mt-5">Select a redaction on the left.</p>
+    </div>
+  </section>
+</div>
+
+<!-- Rooms view -->
+<div id="view-rooms" class="app-main scroll d-none">
+  <div class="container py-4" style="max-width: 960px">
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Join a room</div>
+      <div class="card-body">
+        <form id="joinform" class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label small" for="joinroom">Room ID or alias</label>
+            <input id="joinroom" class="form-control" placeholder="#room:example.org or !abc123:example.org" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small" for="joinvia">Via servers (optional)</label>
+            <input id="joinvia" class="form-control" placeholder="example.org, matrix.org">
+          </div>
+          <div class="col-md-2 d-grid">
+            <button id="joinbtn" class="btn btn-primary" type="submit">Join</button>
+          </div>
+        </form>
+        <div id="joinresult" class="mt-3"></div>
+        <div class="form-text">Invites to the bot account are accepted automatically by the logger
+          (see <code>auto_join_invites</code> in config.ini).</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-semibold">Joined rooms</span>
+        <button id="reloadrooms" class="btn btn-sm btn-outline-secondary" type="button">Reload</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle">
+          <thead><tr><th>Name</th><th>Room ID</th><th>Encrypted</th><th>Logged</th><th class="text-end">Redactions</th><th></th></tr></thead>
+          <tbody id="roomtable"><tr><td colspan="6" class="text-body-secondary">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = { room: null, start: null, end: null, members: {}, loaded: new Set(), current: null };
+
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k === 'text') e.textContent = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) e.append(c);
+  return e;
+}
+const fmt = ts => ts ? new Date(ts).toLocaleString('en-GB') : 'unknown';
+const name = uid => (uid && state.members[uid]) || uid || 'unknown';
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  let data = null;
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((data && data.error) || `${r.status} ${r.statusText}`);
+  return data;
+}
+
+// ---------------- Views ----------------
+function showView(view) {
+  $('#view-redactions').classList.toggle('d-none', view !== 'redactions');
+  $('#view-rooms').classList.toggle('d-none', view !== 'rooms');
+  document.querySelectorAll('[data-view]').forEach(a => a.classList.toggle('active', a.dataset.view === view));
+  if (view === 'rooms') loadRooms();
+}
+document.querySelectorAll('[data-view]').forEach(a => a.addEventListener('click', ev => {
+  ev.preventDefault();
+  if (a.dataset.view === 'rooms') history.replaceState(null, '', '#rooms');
+  else history.replaceState(null, '', state.current ? location.hash : '#');
+  showView(a.dataset.view);
+}));
+
+// ---------------- Filters & list ----------------
+async function loadFilters() {
+  const f = await api('api/filters?own=' + ($('#showall').checked ? '0' : '1') +
+                      '&hide_room=' + ($('#hideroom').checked ? '1' : '0'));
+  const user = $('#user'), room = $('#room'), hs = $('#homeserver');
+  const uSel = user.value, rSel = room.value, hSel = hs.value;
+  user.replaceChildren(el('option', { value: '', text: 'All users' }));
+  room.replaceChildren(el('option', { value: '', text: 'All rooms' }));
+  hs.replaceChildren(el('option', { value: '', text: 'All homeservers' }));
+  for (const u of f.users)
+    user.append(el('option', { value: u.user_id, text: `${u.user_id} (${u.sender} sent, ${u.redacter} redacted)` }));
+  for (const r of f.rooms)
+    room.append(el('option', { value: r.room_id, text: `${r.room_name || r.room_id} (${r.n})` }));
+  for (const h of f.homeservers)
+    hs.append(el('option', { value: h.homeserver, text: `${h.homeserver} (${h.n})` }));
+  user.value = uSel; room.value = rSel; hs.value = hSel;
+
+  // Default filter (own_user): only shown if configured; the "show all" state is kept across reloads
+  const wrap = $('#ownwrap');
+  state.defaultFilter = !!f.own_user;
+  if (f.own_user) {
+    const what = { redacter: 'redactions by', sender: 'messages sent by', any: 'redactions involving' }[f.own_user_role]
+      || 'redactions by';
+    $('#ownlabel').textContent = `Show all redactions (default: only ${what} ${f.own_user})`;
+    wrap.classList.remove('d-none');
+  } else {
+    wrap.classList.add('d-none');
+  }
+}
+
+let listTimer;
+function scheduleList() { clearTimeout(listTimer); listTimer = setTimeout(loadList, 200); }
+
+async function loadList() {
+  const p = new URLSearchParams({ user: $('#user').value, role: $('#role').value,
+                                  room: $('#room').value, homeserver: $('#homeserver').value,
+                                  own: $('#showall').checked ? '0' : '1',
+                                  hide_room: $('#hideroom').checked ? '1' : '0', q: $('#q').value });
+  const items = await api('api/redactions?' + p);
+  $('#count').textContent = `${items.length} ${items.length === 1 ? 'entry' : 'entries'}`;
+  const list = $('#list');
+  list.replaceChildren();
+  for (const it of items) {
+    let prev = it.preview;
+    if (!prev && it.has_original) prev = `[${it.msgtype}]`;
+    if (it.is_ban) prev = `Banned: ${it.state_key || it.original_sender || 'unknown'}`;
+    const node = el('a', { class: 'list-group-item list-group-item-action', 'data-id': it.redacted_event_id,
+                           href: '#', onclick: ev => { ev.preventDefault(); openItem(it, node); } },
+      el('div', { class: 'd-flex justify-content-between small text-body-secondary' },
+        el('span', { text: fmt(it.original_ts || it.redaction_ts) }),
+        el('span', { class: 'text-truncate ms-2', text: it.room_name || it.room_id })),
+      el('div', { class: 'd-flex align-items-center gap-2' },
+        el('span', { class: 'fw-semibold text-truncate', text: it.original_sender || 'unknown' }),
+        it.is_ban ? el('span', { class: 'badge text-bg-danger', text: 'banned' }) : null,
+        it.self_redaction ? el('span', { class: 'badge text-bg-info', text: 'self-redaction' }) : null,
+        it.media_count ? el('span', { class: 'badge text-bg-secondary', text: `${it.media_count} file${it.media_count > 1 ? 's' : ''}` }) : null,
+        it.has_original ? null : el('span', { class: 'badge text-bg-warning', text: 'no content' })),
+      el('div', { class: 'preview' + (prev ? '' : ' fst-italic text-body-secondary'), text: prev || 'Content was not captured' }),
+      el('div', { class: 'small text-body-secondary',
+                  text: (it.is_ban ? `Banned by ${it.redacted_by || 'unknown'}`
+                         : it.self_redaction ? 'Redacted by the sender' : `Redacted by ${it.redacted_by || 'unknown'}`)
+                        + (it.reason ? ` - Reason: ${it.reason}` : '') }));
+    if (state.current === it.redacted_event_id) node.classList.add('active');
+    list.append(node);
+  }
+}
+
+// ---------------- Timeline ----------------
+async function openItem(it, node) {
+  document.querySelectorAll('#list .active').forEach(n => n.classList.remove('active'));
+  node?.classList.add('active');
+  state.current = it.redacted_event_id;
+  history.replaceState(null, '', '#' + encodeURIComponent(it.room_id) + '/' + encodeURIComponent(it.redacted_event_id));
+  await openContext(it.room_id, it.redacted_event_id, it.room_name);
+}
+
+async function openContext(roomId, eventId, roomName) {
+  $('#roomtitle').textContent = roomName || roomId;
+  $('#roomsub').textContent = roomId;
+  const tl = $('#timeline');
+  tl.replaceChildren(el('div', { class: 'text-center mt-5' },
+    el('div', { class: 'spinner-border text-secondary', role: 'status' }),
+    el('div', { class: 'text-body-secondary mt-2', text: 'Loading history...' })));
+  $('#warn').classList.add('d-none');
+
+  let ctx;
+  try { ctx = await api(`api/context?room=${encodeURIComponent(roomId)}&event=${encodeURIComponent(eventId)}`); }
+  catch (e) { tl.replaceChildren(el('div', { class: 'alert alert-danger mt-3', text: 'Error: ' + e.message })); return; }
+
+  if (ctx.warning) { $('#warn').textContent = ctx.warning; $('#warn').classList.remove('d-none'); }
+  Object.assign(state, { room: roomId, start: ctx.start, end: ctx.end, members: ctx.members || {}, loaded: new Set() });
+  tl.replaceChildren(
+    el('div', { class: 'text-center my-2' },
+      el('button', { class: 'btn btn-sm btn-outline-secondary', id: 'older', onclick: () => loadMore('b') }, 'Load older messages')),
+    el('div', { id: 'events' }),
+    el('div', { class: 'text-center my-2' },
+      el('button', { class: 'btn btn-sm btn-outline-secondary', id: 'newer', onclick: () => loadMore('f') }, 'Load newer messages')));
+  $('#older').disabled = !ctx.start;
+  $('#newer').disabled = !ctx.end;
+  appendEvents(ctx.events, false);
+
+  const target = document.getElementById('ev-' + eventId);
+  if (target) target.scrollIntoView({ block: 'center' });
+}
+
+async function loadMore(dir) {
+  const btn = dir === 'b' ? $('#older') : $('#newer');
+  const label = dir === 'b' ? 'Load older messages' : 'Load newer messages';
+  const token = dir === 'b' ? state.start : state.end;
+  if (!token) return;
+  btn.disabled = true; btn.textContent = 'Loading...';
+  try {
+    const res = await api(`api/history?room=${encodeURIComponent(state.room)}&from=${encodeURIComponent(token)}&dir=${dir}`);
+    Object.assign(state.members, res.members || {});
+    if (dir === 'b') state.start = res.end; else state.end = res.end;
+    const tl = $('#timeline');
+    const before = tl.scrollHeight;
+    appendEvents(res.events, dir === 'b');
+    if (dir === 'b') tl.scrollTop += tl.scrollHeight - before;
+    btn.disabled = !res.end || res.events.length === 0;
+  } catch (e) {
+    btn.disabled = false;
+    $('#warn').textContent = 'Error: ' + e.message; $('#warn').classList.remove('d-none');
+  }
+  btn.textContent = label;
+}
+
+function appendEvents(events, prepend) {
+  const box = $('#events');
+  const frag = document.createDocumentFragment();
+  for (const ev of events) {
+    if (state.loaded.has(ev.event_id)) continue;
+    state.loaded.add(ev.event_id);
+    const n = renderEvent(ev);
+    if (n) frag.append(n);
+  }
+  if (prepend) box.prepend(frag); else box.append(frag);
+}
+
+// ---------------- Rendering ----------------
+const HIDDEN_TYPES = new Set(['m.reaction', 'm.room.redaction', 'm.room.encryption', 'm.call.candidates',
+                              'm.room.power_levels', 'm.room.join_rules', 'm.room.history_visibility',
+                              'm.room.guest_access', 'm.room.server_acl']);
+
+function renderEvent(ev) {
+  if (ev.hidden) return null;
+  if (HIDDEN_TYPES.has(ev.type) && ev.status !== 'restored') return null;
+  if (ev.state_key != null && ev.status === 'normal') return renderState(ev);
+  if (ev.redaction && ev.redaction.ban && ev.status !== 'normal') return renderBan(ev);
+
+  const classes = ['msg', ev.status];
+  if (ev.is_target) classes.push('target');
+  const box = el('div', { class: classes.join(' '), id: 'ev-' + ev.event_id });
+  const head = el('div', { class: 'small text-body-secondary' },
+    el('span', { class: 'fw-semibold text-primary me-2', title: ev.sender, text: name(ev.sender) }),
+    el('span', { text: fmt(ev.ts) }));
+  box.append(head);
+
+  if (ev.status === 'redacted') {
+    box.append(el('div', { class: 'body', text: 'Message deleted - content was not captured' }));
+  } else if (ev.status === 'encrypted') {
+    box.append(el('div', { class: 'body', text: 'Encrypted message (not available in the cache)' }));
+  } else {
+    const latest = ev.edits.length ? ev.edits[ev.edits.length - 1] : null;
+    const content = latest ? latest.content : ev.content;
+    const media = latest && latest.media.length ? latest.media : ev.media;
+    if (latest) head.append(el('span', { class: 'badge text-bg-light border ms-2', text: 'edited' }));
+    renderReply(box, ev.content);
+    renderContent(box, content, media, ev);
+    if (latest) {
+      const d = el('details', { class: 'small text-body-secondary mt-1' },
+        el('summary', { text: `Edit history (${ev.edits.length + 1} versions)` }));
+      d.append(el('div', { class: 'old', text: `${fmt(ev.ts)}: ${stripReply(ev.content.body, ev.content) || '[' + (ev.content.msgtype || ev.type) + ']'}` }));
+      for (const e of ev.edits) d.append(el('div', { class: 'old', text: `${fmt(e.ts)}: ${e.content.body || '[' + (e.content.msgtype || '') + ']'}` }));
+      box.append(d);
+    }
+  }
+
+  if (ev.redaction && ev.status !== 'normal') {
+    const r = ev.redaction;
+    const who = r.self ? 'the sender (self-redaction)' : name(r.by);
+    box.append(el('div', { class: 'mt-1' },
+      el('span', { class: 'badge text-bg-danger me-2', text: ev.status === 'restored' ? 'Redacted - restored' : 'Redacted' }),
+      r.self ? el('span', { class: 'badge text-bg-info me-2', text: 'Self-redaction' }) : null,
+      el('span', { class: 'small text-danger-emphasis',
+        text: `by ${who}${r.ts ? ' on ' + fmt(r.ts) : ''}${r.reason ? ' - Reason: ' + r.reason : ''}` })));
+  }
+  return box;
+}
+
+function renderBan(ev) {
+  const r = ev.redaction;
+  const target = ev.state_key || ev.sender;
+  const classes = ['msg', ev.status];
+  if (ev.is_target) classes.push('target');
+  const box = el('div', { class: classes.join(' '), id: 'ev-' + ev.event_id });
+  box.append(el('div', { class: 'small text-body-secondary' },
+    el('span', { class: 'fw-semibold text-primary me-2', title: ev.sender, text: name(ev.sender) }),
+    el('span', { text: fmt(ev.ts) })));
+  box.append(el('div', { class: 'mt-1' },
+    el('span', { class: 'badge text-bg-danger me-2', text: 'Banned' }),
+    el('span', { text: `${name(target)} was banned by ${name(r.by)}${r.ts ? ' on ' + fmt(r.ts) : ''}`
+                       + `${r.reason ? ' - Reason: ' + r.reason : ''}` })));
+  const d = el('details', { class: 'small text-body-secondary mt-1' },
+    el('summary', { text: 'Show redacted content' }));
+  if (ev.status === 'restored') d.append(el('pre', { class: 'body mb-0', text: JSON.stringify(ev.content, null, 2) }));
+  else d.append(el('div', { class: 'body', text: 'Content was not captured' }));
+  box.append(d);
+  return box;
+}
+
+function stripReply(body, content) {
+  if (typeof body !== 'string') return '';
+  const rel = content && content['m.relates_to'];
+  if (rel && rel['m.in_reply_to']) {
+    const lines = body.split('\n');
+    while (lines.length && lines[0].startsWith('>')) lines.shift();
+    if (lines.length && lines[0] === '') lines.shift();
+    return lines.join('\n');
+  }
+  return body;
+}
+
+function renderReply(box, content) {
+  const rel = content && content['m.relates_to'];
+  const rid = rel && rel['m.in_reply_to'] && rel['m.in_reply_to'].event_id;
+  if (!rid) return;
+  const target = document.getElementById('ev-' + rid);
+  let label = 'In reply to a message';
+  if (target) {
+    const b = target.querySelector('.body');
+    const n = target.querySelector('.text-primary');
+    label = `In reply to ${n ? n.textContent : 'unknown'}: ${(b ? b.textContent : '').slice(0, 80)}`;
+  }
+  box.append(el('div', { class: 'reply small text-body-secondary my-1', text: label, onclick: () => {
+    const t = document.getElementById('ev-' + rid);
+    if (t) t.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  } }));
+}
+
+function renderContent(box, c, media, ev) {
+  const mt = c.msgtype;
+  const main = media.find(m => m.kind === 'main');
+  const thumb = media.find(m => m.kind === 'thumbnail');
+  const mbox = el('div', { class: 'media mt-1' });
+
+  if (ev.type === 'm.sticker' || mt === 'm.image') {
+    if (c.body && mt === 'm.image') box.append(el('div', { class: 'body', text: c.body }));
+    if (main) mbox.append(el('a', { href: main.url, target: '_blank' },
+      el('img', { class: 'img-fluid rounded border', src: main.url, alt: c.body || '', loading: 'lazy' })));
+  } else if (mt === 'm.video') {
+    box.append(el('div', { class: 'body', text: c.body || '' }));
+    if (main) mbox.append(el('video', { class: 'rounded border', src: main.url, controls: '', preload: 'metadata', poster: thumb ? thumb.url : null }));
+  } else if (mt === 'm.audio') {
+    box.append(el('div', { class: 'body', text: c.body || '' }));
+    if (main) mbox.append(el('audio', { src: main.url, controls: '', preload: 'metadata' }));
+  } else if (mt === 'm.file') {
+    if (main) mbox.append(el('a', { class: 'btn btn-sm btn-outline-primary', href: main.url, download: c.filename || c.body || 'file' },
+      'Download: ' + (c.filename || c.body || 'file')));
+    else box.append(el('div', { class: 'body', text: 'File: ' + (c.body || 'unknown') }));
+  } else if (mt === 'm.emote') {
+    box.append(el('div', { class: 'body', text: `* ${name(ev.sender)} ${stripReply(c.body, ev.content)}` }));
+  } else if (mt === 'm.location') {
+    box.append(el('div', { class: 'body', text: `Location: ${c.body || ''} ${c.geo_uri || ''}` }));
+  } else if (typeof c.body === 'string') {
+    box.append(el('div', { class: 'body', text: stripReply(c.body, ev.content) }));
+  } else if (ev.type === 'm.poll.start' || ev.type === 'org.matrix.msc3381.poll.start') {
+    const p = c['m.poll'] || c['org.matrix.msc3381.poll.start'] || {};
+    const q = (p.question && (p.question['m.text'] || p.question['org.matrix.msc1767.text'] || p.question.body)) || 'Poll';
+    box.append(el('div', { class: 'body', text: 'Poll: ' + (typeof q === 'string' ? q : JSON.stringify(q)) }));
+  } else {
+    box.append(el('details', { class: 'small' }, el('summary', { text: ev.type }),
+      el('pre', { class: 'body mb-0', text: JSON.stringify(c, null, 2) })));
+  }
+  if (mbox.childNodes.length) box.append(mbox);
+}
+
+function renderState(ev) {
+  const c = ev.content || {};
+  let text;
+  switch (ev.type) {
+    case 'm.room.member': {
+      const who = c.displayname || ev.state_key;
+      if (c.displayname) state.members[ev.state_key] = c.displayname;
+      text = { join: `${who} joined the room`, leave: `${who} left the room`,
+               invite: `${name(ev.sender)} invited ${who}`, ban: `${who} was banned`,
+               knock: `${who} requested to join` }[c.membership] || `${who}: ${c.membership}`;
+      break;
+    }
+    case 'm.room.name': text = `${name(ev.sender)} renamed the room to "${c.name || ''}"`; break;
+    case 'm.room.topic': text = `${name(ev.sender)} changed the topic: ${c.topic || ''}`; break;
+    case 'm.room.avatar': text = `${name(ev.sender)} changed the room avatar`; break;
+    case 'm.room.create': text = `${name(ev.sender)} created the room`; break;
+    case 'm.room.pinned_events': text = `${name(ev.sender)} changed the pinned messages`; break;
+    default: return null;
+  }
+  return el('div', { class: 'text-center small text-body-secondary py-1', id: 'ev-' + ev.event_id,
+                     text: `${fmt(ev.ts)} - ${text}` });
+}
+
+// ---------------- Rooms ----------------
+async function loadRooms() {
+  const tbody = $('#roomtable');
+  tbody.replaceChildren(el('tr', {}, el('td', { colspan: 6, class: 'text-body-secondary', text: 'Loading...' })));
+  try {
+    const res = await api('api/rooms');
+    $('#botuser').textContent = 'Bot: ' + res.user_id;
+    tbody.replaceChildren();
+    if (!res.rooms.length)
+      tbody.append(el('tr', {}, el('td', { colspan: 6, class: 'text-body-secondary', text: 'The bot has not joined any rooms yet.' })));
+    for (const r of res.rooms) {
+      tbody.append(el('tr', {},
+        el('td', {}, el('div', { class: 'fw-semibold', text: r.name || r.alias || '(unnamed)' }),
+          r.alias && r.name ? el('div', { class: 'small text-body-secondary', text: r.alias }) : null),
+        el('td', {}, el('code', { class: 'small', text: r.room_id })),
+        el('td', {}, el('span', { class: 'badge ' + (r.encrypted ? 'text-bg-info' : 'text-bg-light border'), text: r.encrypted ? 'Yes' : 'No' })),
+        el('td', {}, el('span', { class: 'badge ' + (r.logged ? 'text-bg-success' : 'text-bg-secondary'), text: r.logged ? 'Yes' : 'Filtered' })),
+        el('td', { class: 'text-end', text: String(r.redactions) }),
+        el('td', { class: 'text-end' },
+          el('button', { class: 'btn btn-sm btn-outline-danger', type: 'button',
+                         onclick: ev => leaveRoom(r, ev.currentTarget) }, 'Leave'))));
+    }
+  } catch (e) {
+    tbody.replaceChildren(el('tr', {}, el('td', { colspan: 6 }, el('div', { class: 'alert alert-danger mb-0', text: 'Error: ' + e.message }))));
+  }
+}
+
+async function leaveRoom(r, btn) {
+  const label = r.name || r.alias || r.room_id;
+  if (!confirm(`Leave room "${label}"?\n\nThe bot will stop logging redactions there. Already logged redactions are kept.`)) return;
+  btn.disabled = true; btn.textContent = 'Leaving...';
+  try {
+    await api('api/leave', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_id: r.room_id }) });
+    await loadRooms();
+    loadFilters();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Leave';
+    const out = $('#joinresult');
+    out.replaceChildren(el('div', { class: 'alert alert-danger mb-0', text: `Leave failed (${label}): ${e.message}` }));
+    out.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+$('#reloadrooms').addEventListener('click', loadRooms);
+
+$('#joinform').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const btn = $('#joinbtn'), out = $('#joinresult');
+  btn.disabled = true; btn.textContent = 'Joining...';
+  out.replaceChildren();
+  try {
+    const res = await api('api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room: $('#joinroom').value.trim(), via: $('#joinvia').value.trim() }) });
+    const r = res.room || {};
+    out.append(el('div', { class: 'alert alert-success mb-0', text: `Joined ${r.name || r.alias || r.room_id} (${r.room_id})` }));
+    $('#joinroom').value = '';
+    loadRooms();
+    loadFilters();
+  } catch (e) {
+    out.append(el('div', { class: 'alert alert-danger mb-0', text: 'Join failed: ' + e.message }));
+  }
+  btn.disabled = false; btn.textContent = 'Join';
+});
+
+// ---------------- Start ----------------
+for (const id of ['#user', '#role', '#room', '#homeserver']) $(id).addEventListener('change', loadList);
+for (const id of ['#showall', '#hideroom'])
+  $(id).addEventListener('change', async () => { await loadFilters(); loadList(); });
+$('#q').addEventListener('input', scheduleList);
+
+(async () => {
+  await loadFilters();
+  await loadList();
+  const hash = location.hash.slice(1);
+  if (hash === 'rooms') { showView('rooms'); return; }
+  const m = hash.split('/');
+  if (m.length === 2) {
+    state.current = decodeURIComponent(m[1]);
+    document.querySelector(`#list [data-id="${CSS.escape(state.current)}"]`)?.classList.add('active');
+    await openContext(decodeURIComponent(m[0]), state.current, null);
+  }
+})();
+</script>
+</body>
+</html>
