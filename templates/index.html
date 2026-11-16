@@ -353,7 +353,7 @@ function renderEvent(ev) {
     const r = ev.redaction;
     const who = r.self ? 'the sender (self-redaction)' : name(r.by);
     box.append(el('div', { class: 'mt-1' },
-      el('span', { class: 'badge text-bg-danger me-2', text: ev.status === 'restored' ? 'Redacted - restored' : 'Redacted' }),
+      el('span', { class: 'badge text-bg-danger me-2', text: ev.status === 'restored' ? 'Redacted' : 'Redacted - not restored' }),
       r.self ? el('span', { class: 'badge text-bg-info me-2', text: 'Self-redaction' }) : null,
       el('span', { class: 'small text-danger-emphasis',
         text: `by ${who}${r.ts ? ' on ' + fmt(r.ts) : ''}${r.reason ? ' - Reason: ' + r.reason : ''}` })));
